@@ -1,0 +1,49 @@
+msgid ""
+msgstr ""
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: POEditor.com\n"
+"Project-Id-Version: Link Cloaking Add-On Pro\n"
+"Language: en-us\n"
+
+#. Name of the plugin
+#: wpai-linkcloak-add-on.php:250
+msgid "WP All Import - Link Cloaking Add-on"
+msgstr ""
+
+#: wpai-linkcloak-add-on.php:363 wpai-linkcloak-add-on.php:399
+msgid "Link Cloaking Add-On"
+msgstr ""
+
+#: wpai-linkcloak-add-on.php:372 wpai-linkcloak-add-on.php:402
+msgid "Do not cloak links"
+msgstr ""
+
+#: wpai-linkcloak-add-on.php:374 wpai-linkcloak-add-on.php:404
+msgid "Cloak all links present during import"
+msgstr ""
+
+#: wpai-linkcloak-add-on.php:376 wpai-linkcloak-add-on.php:406
+msgid "Only cloak WooCommerce External/Affiliate Product Buy URL "
+msgstr ""
+
+#: wpai-linkcloak-add-on.php:380
+msgid "Link prefix"
+msgstr ""
+
+#. Description of the plugin
+#: 
+msgid "Cloak all links present during import."
+msgstr ""
+
+#. URI of the plugin
+#: 
+msgid "http://www.wpallimport.com/"
+msgstr ""
+
+#. Author of the plugin
+#: 
+msgid "Soflyy"
+msgstr ""
+

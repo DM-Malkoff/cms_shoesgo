@@ -1,0 +1,47 @@
+# WordPress core files (не нужно игнорировать, если разрабатываете ядро)
+# Но если это обычный сайт, можно оставить как есть
+
+# Папка с загруженными файлами (не должна попадать в Git)
+/wp-content/uploads/
+/wp-content/upgrade/
+/wp-content/backups/
+/wp-content/cache/
+
+# Конфигурационные файлы (могут содержать чувствительные данные)
+/wp-config.php
+/.env
+/.htaccess
+
+# Файлы IDE и редакторов
+/.idea/
+/.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Логи и временные файлы
+*.log
+*.tmp
+
+# Node.js / npm зависимости
+/node_modules/
+/package-lock.json
+
+# Composer зависимости (если используется)
+/vendor/
+/composer.lock
+
+# Файлы сборки (если используется препроцессор CSS/JS)
+*.min.js
+*.min.css
+/assets/dist/
+
+# Исключаем резервные копии и дампы БД
+*.sql
+*.zip
+*.tar.gz
+
+# Игнорируем мультисайтовые загрузки (если не используется)
+/wp-content/blogs.dir/
+

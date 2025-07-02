@@ -7,8 +7,8 @@ jQuery(document).ready(function($) {
     var isProcessing = false;
     var retryCount = 0;
     var maxRetries = 3;
-    var delayBetweenBatches = 5000; // 5 секунд между пакетами
-    var ajaxTimeout = 300000; // 5 минут таймаут
+    var delayBetweenBatches = 2000; // 2 секунды между пакетами (уменьшили, так как батчи меньше)
+    var ajaxTimeout = 180000; // 3 минуты таймаут
     var processedProducts = [];
     
     function formatPrice(price) {
@@ -25,33 +25,33 @@ jQuery(document).ready(function($) {
         processedProducts.push(product);
         
         // Создаем HTML для товара
-        var productHtml = '<div class="product-item" style="margin: 10px 0; padding: 10px; border: 1px solid #ddd; background: #fff; display: flex; align-items: center;">';
+        var productHtml = '<div class="product-item">';
         
         // Добавляем миниатюру
         if (product.thumbnail) {
-            productHtml += '<img src="' + product.thumbnail + '" style="width: 50px; height: 50px; margin-right: 10px; object-fit: cover;" />';
+            productHtml += '<img src="' + product.thumbnail + '" class="product-thumbnail" alt="' + product.title + '" />';
         } else {
-            productHtml += '<div style="width: 50px; height: 50px; margin-right: 10px; background: #f0f0f1;"></div>';
+            productHtml += '<div class="product-placeholder">Нет фото</div>';
         }
         
         // Добавляем информацию о товаре
-        productHtml += '<div style="flex-grow: 1;">';
-        productHtml += '<strong>' + product.title + '</strong>';
+        productHtml += '<div class="product-info">';
+        productHtml += '<div class="product-title">' + product.title + '</div>';
         if (product.sku) {
-            productHtml += ' <span style="color: #666;">(SKU: ' + product.sku + ')</span>';
+            productHtml += '<div class="product-meta">SKU: ' + product.sku + '</div>';
         }
         if (product.price) {
-            productHtml += '<br><span style="color: #666;">' + formatPrice(product.price) + '</span>';
+            productHtml += '<div class="product-meta product-price">' + formatPrice(product.price) + '</div>';
         }
         productHtml += '</div>';
         
         // Добавляем ссылки
-        productHtml += '<div style="margin-left: 10px;">';
+        productHtml += '<div class="product-actions">';
         if (product.view_link) {
-            productHtml += '<a href="' + product.view_link + '" target="_blank" class="button button-small" style="margin-right: 5px;">Просмотр</a>';
+            productHtml += '<a href="' + product.view_link + '" target="_blank" class="button">Просмотр</a>';
         }
         if (product.edit_link) {
-            productHtml += '<a href="' + product.edit_link + '" target="_blank" class="button button-small">Редактировать</a>';
+            productHtml += '<a href="' + product.edit_link + '" target="_blank" class="button">Редактировать</a>';
         }
         productHtml += '</div>';
         
@@ -59,6 +59,12 @@ jQuery(document).ready(function($) {
         
         // Добавляем товар в начало списка
         $processedList.prepend(productHtml);
+        
+        // Ограничиваем количество показываемых товаров для производительности
+        var items = $processedList.find('.product-item');
+        if (items.length > 50) {
+            items.slice(50).remove();
+        }
     }
     
     function updateStatus(message, isError) {

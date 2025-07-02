@@ -58,12 +58,12 @@ class WC_Product_Similarity {
                 return;
             }
             
-            // Получаем категории текущего товара
-            $current_categories = $current_product->get_category_ids();
-            if (empty($current_categories)) {
-                error_log("No categories found for product: " . $product_id);
-                return;
-            }
+                    // Получаем категории текущего товара
+        $current_categories = $current_product->get_category_ids();
+        if (empty($current_categories)) {
+            error_log("No categories found for product: " . $product_id . ". Will find random similar products.");
+            // Не возвращаемся, а продолжаем - найдем случайные товары
+        }
             
             // Получаем родительские категории
             $parent_categories = array();
@@ -78,9 +78,10 @@ class WC_Product_Similarity {
             $table_name = $wpdb->prefix . 'product_similarities';
             $wpdb->delete($table_name, array('product_id' => $product_id));
             
-            $similar_products = array();
-            
-            // Получаем товары из текущих категорий
+                    $similar_products = array();
+        
+        // Получаем товары из текущих категорий (если они есть)
+        if (!empty($current_categories)) {
             foreach ($current_categories as $category_id) {
                 $products_in_category = $wpdb->get_col($wpdb->prepare("
                     SELECT DISTINCT p.ID
@@ -105,6 +106,7 @@ class WC_Product_Similarity {
                     }
                 }
             }
+        }
             
             // Если товаров недостаточно, добавляем из родительских категорий
             if (count($similar_products) < $this->max_similar_products && !empty($parent_categories)) {
@@ -171,27 +173,55 @@ class WC_Product_Similarity {
                 }
             }
             
-            // Сохраняем результаты
-            if (!empty($similar_products)) {
-                foreach ($similar_products as $similar) {
-                    $result = $wpdb->insert(
-                        $table_name,
-                        array(
-                            'product_id' => $product_id,
-                            'similar_product_id' => $similar['product_id'],
-                            'similarity_score' => $similar['score']
-                        ),
-                        array('%d', '%d', '%f')
-                    );
-                    
-                    if ($result === false) {
-                        error_log("Error inserting similarity record: " . $wpdb->last_error);
-                    }
+                    // Сохраняем результаты
+        if (!empty($similar_products)) {
+            $saved_count = 0;
+            foreach ($similar_products as $similar) {
+                $result = $wpdb->insert(
+                    $table_name,
+                    array(
+                        'product_id' => $product_id,
+                        'similar_product_id' => $similar['product_id'],
+                        'similarity_score' => $similar['score']
+                    ),
+                    array('%d', '%d', '%f')
+                );
+                
+                if ($result === false) {
+                    error_log("Error inserting similarity record: " . $wpdb->last_error);
+                } else {
+                    $saved_count++;
                 }
             }
+            error_log("Saved {$saved_count} similar products for product ID: " . $product_id);
+        } else {
+            error_log("WARNING: No similar products found for product ID: " . $product_id . ". This product will appear in 'products without similar' list.");
+            // Создаем хотя бы одну запись с низким score, чтобы товар не оставался полностью без связей
+            $fallback_products = $wpdb->get_col($wpdb->prepare("
+                SELECT ID FROM {$wpdb->posts}
+                WHERE post_type = 'product'
+                AND post_status = 'publish'
+                AND ID != %d
+                ORDER BY RAND()
+                LIMIT 1
+            ", $product_id));
             
-            error_log("Completed update_product_similarities for product ID: " . $product_id);
-            return true;
+            if (!empty($fallback_products)) {
+                $wpdb->insert(
+                    $table_name,
+                    array(
+                        'product_id' => $product_id,
+                        'similar_product_id' => $fallback_products[0],
+                        'similarity_score' => 0.1
+                    ),
+                    array('%d', '%d', '%f')
+                );
+                error_log("Created fallback similarity for product ID: " . $product_id);
+            }
+        }
+        
+        error_log("Completed update_product_similarities for product ID: " . $product_id);
+        return true;
             
         } catch (Exception $e) {
             error_log("Error in update_product_similarities: " . $e->getMessage());

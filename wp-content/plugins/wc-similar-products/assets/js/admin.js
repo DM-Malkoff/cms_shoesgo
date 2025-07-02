@@ -9,6 +9,7 @@ jQuery(document).ready(function($) {
     var $productCategories = $('#product-categories');
     var $selectedInfo = $('#selected-info');
     var $fixButton = $('#fix-missing-similarities');
+    var $debugButton = $('#debug-missing-similarities');
     var $categoriesSearch = $('#categories-search');
     var $selectFoundBtn = $('#select-found-categories');
     var $clearCategoriesBtn = $('#clear-categories-selection');
@@ -251,6 +252,7 @@ jQuery(document).ready(function($) {
     // Инициализация
     updateProcessingMode();
     updateCategoriesInfo();
+    refreshStatistics();
     
     function formatPrice(price) {
         return price ? new Intl.NumberFormat('ru-RU', { 
@@ -479,6 +481,11 @@ jQuery(document).ready(function($) {
         startProcessing();
     });
     
+    // Обработчик для кнопки диагностики
+    $debugButton.on('click', function() {
+        debugProblematicProducts();
+    });
+    
     // Вынесем логику запуска в отдельную функцию
     function startProcessing() {
         isProcessing = true;
@@ -557,18 +564,22 @@ jQuery(document).ready(function($) {
                             '</div>';
                             
                             $('#selected-info').parent().after(warningHtml);
-                            // Переподключаем обработчик
-                            $('#fix-missing-similarities').on('click', function() {
-                                if (isProcessing) return;
-                                
-                                if (!confirm('Запустить обработку товаров без похожих товаров?\n\nЭто безопасная операция - существующие связи НЕ будут затронуты.')) {
-                                    return;
-                                }
-                                
-                                $processingMode.val('new');
-                                updateProcessingMode();
-                                startProcessing();
-                            });
+                                                         // Переподключаем обработчики
+                             $('#fix-missing-similarities').on('click', function() {
+                                 if (isProcessing) return;
+                                 
+                                 if (!confirm('Запустить обработку товаров без похожих товаров?\n\nЭто безопасная операция - существующие связи НЕ будут затронуты.')) {
+                                     return;
+                                 }
+                                 
+                                 $processingMode.val('new');
+                                 updateProcessingMode();
+                                 startProcessing();
+                             });
+                             
+                             $('#debug-missing-similarities').on('click', function() {
+                                 debugProblematicProducts();
+                             });
                         } else {
                             // Обновляем число в существующем предупреждении
                             $('.missing-similarities-warning p:first strong').text(data.products_without_similar);
@@ -581,7 +592,80 @@ jQuery(document).ready(function($) {
             },
             error: function() {
                 console.log('Ошибка при обновлении статистики');
-            }
-        });
-    }
-}); 
+                         }
+         });
+     }
+     
+     // Функция для диагностики проблемных товаров
+     function debugProblematicProducts() {
+         $('#debug-results').show();
+         $('#debug-content').html('<p>🔄 Анализируем проблемные товары...</p>');
+         
+         $.ajax({
+             url: wcSimilarProducts.ajax_url,
+             type: 'POST',
+             data: {
+                 action: 'debug_products_without_similar',
+                 nonce: wcSimilarProducts.nonce
+             },
+             success: function(response) {
+                 if (response.success) {
+                     var data = response.data;
+                     var html = '<p><strong>Найдено ' + data.total_count + ' проблемных товаров:</strong></p>';
+                     
+                     if (data.products && data.products.length > 0) {
+                         html += '<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">';
+                         html += '<thead><tr style="background: #f0f0f1;">';
+                         html += '<th style="padding: 8px; border: 1px solid #ddd; text-align: left;">ID</th>';
+                         html += '<th style="padding: 8px; border: 1px solid #ddd; text-align: left;">Название</th>';
+                         html += '<th style="padding: 8px; border: 1px solid #ddd; text-align: center;">WC Товар</th>';
+                         html += '<th style="padding: 8px; border: 1px solid #ddd; text-align: center;">Категории</th>';
+                         html += '<th style="padding: 8px; border: 1px solid #ddd; text-align: left;">Тип</th>';
+                         html += '<th style="padding: 8px; border: 1px solid #ddd; text-align: left;">Действия</th>';
+                         html += '</tr></thead><tbody>';
+                         
+                         $.each(data.products, function(index, product) {
+                             var categoriesText = product.categories_count > 0 ? 
+                                 product.categories_count + ' (' + product.categories.join(', ') + ')' : 
+                                 '❌ Нет';
+                             
+                             var statusColor = product.has_wc_product === 'YES' ? '#00a32a' : '#d63638';
+                             var categoryColor = product.categories_count > 0 ? '#00a32a' : '#d63638';
+                             
+                             html += '<tr>';
+                             html += '<td style="padding: 8px; border: 1px solid #ddd;">' + product.id + '</td>';
+                             html += '<td style="padding: 8px; border: 1px solid #ddd;">' + product.title + '</td>';
+                             html += '<td style="padding: 8px; border: 1px solid #ddd; text-align: center; color: ' + statusColor + ';">' + product.has_wc_product + '</td>';
+                             html += '<td style="padding: 8px; border: 1px solid #ddd; text-align: center; color: ' + categoryColor + ';">' + categoriesText + '</td>';
+                             html += '<td style="padding: 8px; border: 1px solid #ddd;">' + product.product_type + '</td>';
+                             html += '<td style="padding: 8px; border: 1px solid #ddd;">';
+                             html += '<a href="/wp-admin/post.php?post=' + product.id + '&action=edit" target="_blank" class="button button-small">Редактировать</a>';
+                             html += '</td>';
+                             html += '</tr>';
+                         });
+                         
+                         html += '</tbody></table>';
+                         
+                         html += '<div style="margin-top: 15px; padding: 10px; background: #fff3cd; border-left: 4px solid #ffb900;">';
+                         html += '<h6 style="margin: 0 0 8px 0;">🔧 Рекомендации по исправлению:</h6>';
+                         html += '<ul style="margin: 0; padding-left: 20px;">';
+                         html += '<li><strong>Товары без категорий:</strong> Добавьте категории для корректной работы алгоритма</li>';
+                         html += '<li><strong>Неверный тип товара:</strong> Проверьте настройки WooCommerce</li>';
+                         html += '<li><strong>Товары без WC объекта:</strong> Возможно повреждены данные товара</li>';
+                         html += '</ul>';
+                         html += '</div>';
+                     } else {
+                         html += '<p style="color: #00a32a;">✅ Проблемных товаров не найдено!</p>';
+                     }
+                     
+                     $('#debug-content').html(html);
+                 } else {
+                     $('#debug-content').html('<p style="color: #d63638;">❌ Ошибка при получении диагностической информации</p>');
+                 }
+             },
+             error: function() {
+                 $('#debug-content').html('<p style="color: #d63638;">❌ Ошибка соединения при диагностике</p>');
+             }
+         });
+     }
+});  

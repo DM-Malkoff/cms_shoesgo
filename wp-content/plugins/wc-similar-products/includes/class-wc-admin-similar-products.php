@@ -9,6 +9,7 @@ class WC_Admin_Similar_Products {
         add_action('wp_ajax_recalculate_similarities_batch', array($this, 'handle_ajax_recalculate_batch'));
         add_action('wp_ajax_get_category_stats', array($this, 'handle_ajax_category_stats'));
         add_action('wp_ajax_refresh_statistics', array($this, 'handle_ajax_refresh_statistics'));
+        add_action('wp_ajax_debug_products_without_similar', array($this, 'handle_ajax_debug_products_without_similar'));
     }
     
     public function add_admin_menu() {
@@ -334,6 +335,67 @@ class WC_Admin_Similar_Products {
         ));
     }
     
+    public function handle_ajax_debug_products_without_similar() {
+        // Проверяем nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'wc_recalculate_similarities')) {
+            wp_die('Security check failed');
+        }
+        
+        // Проверяем права доступа
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die('Access denied');
+        }
+        
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'product_similarities';
+        
+        // Находим товары без похожих товаров
+        $products_without_similar = $wpdb->get_results("
+            SELECT p.ID, p.post_title, p.post_status
+            FROM {$wpdb->posts} p
+            LEFT JOIN {$table_name} ps ON p.ID = ps.product_id
+            WHERE p.post_type = 'product' 
+            AND p.post_status = 'publish'
+            AND ps.product_id IS NULL
+            ORDER BY p.ID
+            LIMIT 10
+        ");
+        
+        $debug_info = array();
+        
+        foreach ($products_without_similar as $product_row) {
+            $product = wc_get_product($product_row->ID);
+            $categories = array();
+            $category_names = array();
+            
+            if ($product) {
+                $category_ids = $product->get_category_ids();
+                foreach ($category_ids as $cat_id) {
+                    $term = get_term($cat_id, 'product_cat');
+                    if ($term && !is_wp_error($term)) {
+                        $categories[] = $cat_id;
+                        $category_names[] = $term->name;
+                    }
+                }
+            }
+            
+            $debug_info[] = array(
+                'id' => $product_row->ID,
+                'title' => $product_row->post_title,
+                'status' => $product_row->post_status,
+                'has_wc_product' => $product ? 'YES' : 'NO',
+                'categories_count' => count($categories),
+                'categories' => $category_names,
+                'product_type' => $product ? $product->get_type() : 'N/A'
+            );
+        }
+        
+        wp_send_json_success(array(
+            'products' => $debug_info,
+            'total_count' => count($products_without_similar)
+        ));
+    }
+    
     public function handle_recalculate() {
         // Оставляем старый метод для совместимости, но теперь он не используется
         // Вся обработка происходит через AJAX
@@ -547,9 +609,16 @@ class WC_Admin_Similar_Products {
                         <button type="button" id="fix-missing-similarities" class="button button-secondary">
                             🔧 Исправить - обработать товары без похожих
                         </button>
+                        <button type="button" id="debug-missing-similarities" class="button button-small" style="margin-left: 10px;">
+                            🔍 Диагностика проблемных товаров
+                        </button>
                         <small style="color: #666; display: block; margin-top: 8px;">
                             ✅ Безопасная операция - существующие связи НЕ будут затронуты
                         </small>
+                        <div id="debug-results" style="display: none; margin-top: 15px; padding: 10px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
+                            <h5 style="margin-top: 0;">🔍 Диагностика проблемных товаров:</h5>
+                            <div id="debug-content"></div>
+                        </div>
                     </div>
                 <?php endif; ?>
                 

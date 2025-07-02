@@ -8,6 +8,7 @@ class WC_Admin_Similar_Products {
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
         add_action('wp_ajax_recalculate_similarities_batch', array($this, 'handle_ajax_recalculate_batch'));
         add_action('wp_ajax_get_category_stats', array($this, 'handle_ajax_category_stats'));
+        add_action('wp_ajax_refresh_statistics', array($this, 'handle_ajax_refresh_statistics'));
     }
     
     public function add_admin_menu() {
@@ -31,14 +32,14 @@ class WC_Admin_Similar_Products {
             'wc-similar-products-admin',
             plugin_dir_url(dirname(__FILE__)) . 'assets/css/admin.css',
             array(),
-            '1.1.0'
+            '1.2.0'
         );
         
         wp_enqueue_script(
             'wc-similar-products-admin',
             plugin_dir_url(dirname(__FILE__)) . 'assets/js/admin.js',
             array('jquery'),
-            '1.1.0',
+            '1.2.0',
             true
         );
         
@@ -113,8 +114,8 @@ class WC_Admin_Similar_Products {
             
             // Добавляем условие для товаров без похожих
             if ($processing_mode === 'new' || $processing_mode === 'categories_new') {
-                $table_name = $wpdb->prefix . 'product_similarities';
-                $join_clauses[] = "LEFT JOIN {$table_name} ps ON p.ID = ps.product_id";
+                $similarities_table = $wpdb->prefix . 'product_similarities';
+                $join_clauses[] = "LEFT JOIN {$similarities_table} ps ON p.ID = ps.product_id";
                 $where_conditions[] = "ps.product_id IS NULL";
             }
             
@@ -125,16 +126,40 @@ class WC_Admin_Similar_Products {
             $count_sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p {$join_sql} WHERE {$where_sql}";
             $total_products = $wpdb->get_var($count_sql);
             
+            error_log("WC Similar Products: Processing mode '{$processing_mode}', Total products: {$total_products}, Batch: {$batch_number}");
+            
             // Получаем товары для текущего батча
             $offset = $batch_number * $batch_size;
-            $products_sql = $wpdb->prepare("
-                SELECT DISTINCT p.ID, p.post_title 
-                FROM {$wpdb->posts} p {$join_sql} 
-                WHERE {$where_sql}
-                ORDER BY p.ID
-                LIMIT %d OFFSET %d
-            ", $batch_size, $offset);
+            
+            // Для режимов с категориями используем подзапрос для избежания дублирования
+            if (($processing_mode === 'categories' || $processing_mode === 'categories_new') && !empty($selected_categories)) {
+                $products_sql = $wpdb->prepare("
+                    SELECT p.ID, p.post_title 
+                    FROM {$wpdb->posts} p 
+                    WHERE p.post_type = 'product' 
+                    AND p.post_status = 'publish'
+                    AND p.ID IN (
+                        SELECT DISTINCT tr.object_id 
+                        FROM {$wpdb->term_relationships} tr 
+                        JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id 
+                        WHERE tt.term_id IN (" . implode(',', $selected_categories) . ")
+                    )
+                    " . ($processing_mode === 'categories_new' ? "AND p.ID NOT IN (SELECT DISTINCT product_id FROM {$similarities_table} WHERE product_id IS NOT NULL)" : "") . "
+                    ORDER BY p.ID
+                    LIMIT %d OFFSET %d
+                ", $batch_size, $offset);
+            } else {
+                $products_sql = $wpdb->prepare("
+                    SELECT DISTINCT p.ID, p.post_title 
+                    FROM {$wpdb->posts} p {$join_sql} 
+                    WHERE {$where_sql}
+                    ORDER BY p.ID
+                    LIMIT %d OFFSET %d
+                ", $batch_size, $offset);
+            }
+            
             $products = $wpdb->get_results($products_sql);
+            error_log("WC Similar Products: Retrieved " . count($products) . " products for batch {$batch_number}");
             
             $processed_in_batch = 0;
             $last_product = null;
@@ -183,12 +208,26 @@ class WC_Admin_Similar_Products {
             $percentage = $total_products > 0 ? round(($total_processed / $total_products) * 100, 1) : 100;
             $complete = $total_processed >= $total_products;
             
+            error_log("WC Similar Products: Batch {$batch_number} completed. Processed {$processed_in_batch} products in this batch. Total: {$total_processed}/{$total_products} ({$percentage}%). Complete: " . ($complete ? 'YES' : 'NO'));
+            
+            // Дополнительная проверка: если у нас меньше товаров чем ожидалось в батче, возможно закончились товары
+            if (count($products) < $batch_size && !$complete) {
+                error_log("WC Similar Products: WARNING - Got " . count($products) . " products but expected {$batch_size}. Forcing completion.");
+                $complete = true;
+            }
+            
             wp_send_json_success(array(
                 'processed' => $total_processed,
                 'total' => $total_products,
                 'percentage' => $percentage,
                 'complete' => $complete,
-                'product' => $last_product
+                'product' => $last_product,
+                'debug_info' => array(
+                    'batch_size' => $batch_size,
+                    'retrieved_products' => count($products),
+                    'processed_in_batch' => $processed_in_batch,
+                    'offset' => $offset
+                )
             ));
             
         } catch (Exception $e) {
@@ -242,6 +281,56 @@ class WC_Admin_Similar_Products {
             'total_products' => intval($total_products),
             'processing_mode' => $processing_mode,
             'selected_categories' => count($selected_categories)
+        ));
+    }
+    
+    public function handle_ajax_refresh_statistics() {
+        // Проверяем nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'wc_recalculate_similarities')) {
+            wp_die('Security check failed');
+        }
+        
+        // Проверяем права доступа
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die('Access denied');
+        }
+        
+        global $wpdb;
+        
+        // Получаем обновленную статистику
+        $table_name = $wpdb->prefix . 'product_similarities';
+        $total_products = $wpdb->get_var("SELECT COUNT(DISTINCT product_id) FROM {$table_name}");
+        $total_relations = $wpdb->get_var("SELECT COUNT(*) FROM {$table_name}");
+        $avg_similar = $total_products ? round($total_relations / $total_products, 1) : 0;
+        
+        // Получаем последние обработанные товары
+        $recent_products = $wpdb->get_results("
+            SELECT DISTINCT p.ID, p.post_title, 
+                   (SELECT COUNT(*) FROM {$table_name} WHERE product_id = p.ID) as similar_count
+            FROM {$wpdb->posts} p
+            JOIN {$table_name} ps ON p.ID = ps.product_id
+            WHERE p.post_type = 'product'
+            GROUP BY p.ID
+            ORDER BY p.ID DESC
+            LIMIT 10
+        ");
+        
+        // Проверяем есть ли товары без похожих товаров
+        $products_without_similar = $wpdb->get_var("
+            SELECT COUNT(DISTINCT p.ID)
+            FROM {$wpdb->posts} p
+            LEFT JOIN {$table_name} ps ON p.ID = ps.product_id
+            WHERE p.post_type = 'product' 
+            AND p.post_status = 'publish'
+            AND ps.product_id IS NULL
+        ");
+        
+        wp_send_json_success(array(
+            'total_products' => number_format($total_products, 0, ',', ' '),
+            'total_relations' => number_format($total_relations, 0, ',', ' '),
+            'avg_similar' => $avg_similar,
+            'recent_products' => $recent_products,
+            'products_without_similar' => $products_without_similar
         ));
     }
     

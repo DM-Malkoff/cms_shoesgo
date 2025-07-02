@@ -340,10 +340,16 @@ jQuery(document).ready(function($) {
                     
                     // Обновляем прогресс
                     $progress.css('width', data.percentage + '%');
-                    updateStatus(
-                        wcSimilarProducts.processing_text.replace('%s', data.percentage) + 
-                        '<br><small>Processed: ' + data.processed + ' of ' + data.total + '</small>'
-                    );
+                    
+                    var statusText = wcSimilarProducts.processing_text.replace('%s', data.percentage) + 
+                        '<br><small>Processed: ' + data.processed + ' of ' + data.total + '</small>';
+                    
+                    // Добавляем debug информацию если она есть
+                    if (data.debug_info) {
+                        statusText += '<br><small style="color: #666;">Batch: ' + data.debug_info.retrieved_products + '/' + data.debug_info.batch_size + ' products retrieved</small>';
+                    }
+                    
+                    updateStatus(statusText);
                     
                     // Обновляем список обработанных товаров
                     if (data.product) {
@@ -359,10 +365,13 @@ jQuery(document).ready(function($) {
                         // Завершаем процесс
                         isProcessing = false;
                         $button.prop('disabled', false);
-                        updateStatus(wcSimilarProducts.success_text);
+                        updateStatus(wcSimilarProducts.success_text + '<br><small>Обработано товаров: ' + data.processed + '</small>');
                         
                         // Скрываем предупреждение о недостающих товарах если оно есть
                         $('.missing-similarities-warning').fadeOut();
+                        
+                        // Обновляем статистику после завершения
+                        refreshStatistics();
                         
                         setTimeout(function() {
                             $progressWrapper.fadeOut();
@@ -451,16 +460,7 @@ jQuery(document).ready(function($) {
             return;
         }
         
-        isProcessing = true;
-        retryCount = 0;
-        processedProducts = [];
-        $button.prop('disabled', true);
-        $progressWrapper.show();
-        $progress.css('width', '0%');
-        $processedList.empty();
-        updateStatus(wcSimilarProducts.processing_text.replace('%s', '0'));
-        
-        processBatch(0);
+        startProcessing();
     });
     
     // Обработчик для кнопки "Исправить"
@@ -475,9 +475,113 @@ jQuery(document).ready(function($) {
         $processingMode.val('new');
         updateProcessingMode();
         
-        // Запускаем обработку
-        setTimeout(function() {
-            $button.click();
-        }, 500);
+        // Запускаем обработку напрямую, минуя confirm основной кнопки
+        startProcessing();
     });
+    
+    // Вынесем логику запуска в отдельную функцию
+    function startProcessing() {
+        isProcessing = true;
+        retryCount = 0;
+        processedProducts = [];
+        $button.prop('disabled', true);
+        $progressWrapper.show();
+        $progress.css('width', '0%');
+        $processedList.empty();
+        updateStatus(wcSimilarProducts.processing_text.replace('%s', '0'));
+        
+        processBatch(0);
+    }
+    
+    // Функция для обновления статистики
+    function refreshStatistics() {
+        $.ajax({
+            url: wcSimilarProducts.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'refresh_statistics',
+                nonce: wcSimilarProducts.nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    var data = response.data;
+                    
+                    // Обновляем статистику в таблице
+                    $('.wc-similar-stats-table tr:nth-child(1) td:nth-child(2)').text(data.total_products);
+                    $('.wc-similar-stats-table tr:nth-child(2) td:nth-child(2)').text(data.total_relations);
+                    $('.wc-similar-stats-table tr:nth-child(3) td:nth-child(2)').text(data.avg_similar);
+                    
+                    // Обновляем таблицу последних товаров
+                    if (data.recent_products && data.recent_products.length > 0) {
+                        var recentTableBody = $('.wc-similar-recent-products tbody');
+                        recentTableBody.empty();
+                        
+                        $.each(data.recent_products, function(index, product) {
+                            var editLink = '/wp-admin/post.php?post=' + product.ID + '&action=edit';
+                            var viewLink = '/?p=' + product.ID; // Может потребоваться настройка для правильной ссылки
+                            
+                            var row = '<tr>' +
+                                '<td>' + product.ID + '</td>' +
+                                '<td>' + product.post_title + '</td>' +
+                                '<td align="center">' + product.similar_count + '</td>' +
+                                '<td>' +
+                                    '<a href="' + editLink + '" target="_blank">Редактировать</a>' +
+                                    '&nbsp;|&nbsp;' +
+                                    '<a href="' + viewLink + '" target="_blank">Просмотреть</a>' +
+                                '</td>' +
+                            '</tr>';
+                            recentTableBody.append(row);
+                        });
+                    }
+                    
+                    // Показываем/скрываем предупреждение о товарах без похожих
+                    if (data.products_without_similar > 0) {
+                        if ($('.missing-similarities-warning').length === 0) {
+                            // Создаем предупреждение если его нет
+                            var warningHtml = '<div class="missing-similarities-warning">' +
+                                '<h4 style="margin-top: 0; color: #856404;">⚠️ Обнаружены товары без похожих товаров</h4>' +
+                                '<p style="margin-bottom: 10px;">' +
+                                    'Найдено <strong>' + data.products_without_similar + '</strong> товаров без похожих товаров. ' +
+                                    'Это может быть результатом прерванной обработки или ошибки.' +
+                                '</p>' +
+                                '<p style="margin-bottom: 15px; font-size: 13px; color: #666;">' +
+                                    '<strong>Что произошло:</strong> Возможно, процесс обработки был прерван, и некоторые товары остались без похожих товаров. ' +
+                                    'Нажмите кнопку ниже, чтобы безопасно обработать только эти товары.' +
+                                '</p>' +
+                                '<button type="button" id="fix-missing-similarities" class="button button-secondary">' +
+                                    '🔧 Исправить - обработать товары без похожих' +
+                                '</button>' +
+                                '<small style="color: #666; display: block; margin-top: 8px;">' +
+                                    '✅ Безопасная операция - существующие связи НЕ будут затронуты' +
+                                '</small>' +
+                            '</div>';
+                            
+                            $('#selected-info').parent().after(warningHtml);
+                            // Переподключаем обработчик
+                            $('#fix-missing-similarities').on('click', function() {
+                                if (isProcessing) return;
+                                
+                                if (!confirm('Запустить обработку товаров без похожих товаров?\n\nЭто безопасная операция - существующие связи НЕ будут затронуты.')) {
+                                    return;
+                                }
+                                
+                                $processingMode.val('new');
+                                updateProcessingMode();
+                                startProcessing();
+                            });
+                        } else {
+                            // Обновляем число в существующем предупреждении
+                            $('.missing-similarities-warning p:first strong').text(data.products_without_similar);
+                            $('.missing-similarities-warning').show();
+                        }
+                    } else {
+                        $('.missing-similarities-warning').hide();
+                    }
+                }
+            },
+            error: function() {
+                console.log('Ошибка при обновлении статистики');
+            }
+        });
+    }
 }); 

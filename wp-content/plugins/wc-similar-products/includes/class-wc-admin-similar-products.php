@@ -7,6 +7,7 @@ class WC_Admin_Similar_Products {
         add_action('admin_init', array($this, 'handle_recalculate'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
         add_action('wp_ajax_recalculate_similarities_batch', array($this, 'handle_ajax_recalculate_batch'));
+        add_action('wp_ajax_get_category_stats', array($this, 'handle_ajax_category_stats'));
     }
     
     public function add_admin_menu() {
@@ -46,7 +47,8 @@ class WC_Admin_Similar_Products {
             'nonce' => wp_create_nonce('wc_recalculate_similarities'),
             'processing_text' => 'Обработка... %s%',
             'success_text' => 'Пересчет завершен успешно!',
-            'error_text' => 'Произошла ошибка при пересчете'
+            'error_text' => 'Произошла ошибка при пересчете',
+            'stats_nonce' => wp_create_nonce('wc_category_stats')
         ));
     }
     
@@ -63,6 +65,10 @@ class WC_Admin_Similar_Products {
         
         $batch_number = intval($_POST['batch']);
         $batch_size = 5; // Уменьшаем размер батча для избежания таймаутов
+        
+        // Получаем параметры фильтрации
+        $processing_mode = isset($_POST['processing_mode']) ? sanitize_text_field($_POST['processing_mode']) : 'all';
+        $selected_categories = isset($_POST['categories']) ? array_map('intval', $_POST['categories']) : array();
         
         try {
             // Увеличиваем лимиты
@@ -82,23 +88,41 @@ class WC_Admin_Similar_Products {
                 $wpdb->query("TRUNCATE TABLE {$table_name}");
             }
             
+            // Строим SQL запросы в зависимости от режима обработки
+            $where_conditions = array("p.post_type = 'product'", "p.post_status = 'publish'");
+            $join_clauses = array();
+            
+            // Добавляем условия для категорий
+            if (($processing_mode === 'categories' || $processing_mode === 'categories_new') && !empty($selected_categories)) {
+                $join_clauses[] = "JOIN {$wpdb->term_relationships} tr ON p.ID = tr.object_id";
+                $join_clauses[] = "JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id";
+                $where_conditions[] = "tt.term_id IN (" . implode(',', $selected_categories) . ")";
+            }
+            
+            // Добавляем условие для товаров без похожих
+            if ($processing_mode === 'new' || $processing_mode === 'categories_new') {
+                $table_name = $wpdb->prefix . 'product_similarities';
+                $join_clauses[] = "LEFT JOIN {$table_name} ps ON p.ID = ps.product_id";
+                $where_conditions[] = "ps.product_id IS NULL";
+            }
+            
+            $join_sql = implode(' ', array_unique($join_clauses));
+            $where_sql = implode(' AND ', $where_conditions);
+            
             // Получаем общее количество товаров
-            $total_products = $wpdb->get_var("
-                SELECT COUNT(*) FROM {$wpdb->posts} 
-                WHERE post_type = 'product' 
-                AND post_status = 'publish'
-            ");
+            $count_sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p {$join_sql} WHERE {$where_sql}";
+            $total_products = $wpdb->get_var($count_sql);
             
             // Получаем товары для текущего батча
             $offset = $batch_number * $batch_size;
-            $products = $wpdb->get_results($wpdb->prepare("
-                SELECT ID, post_title 
-                FROM {$wpdb->posts} 
-                WHERE post_type = 'product' 
-                AND post_status = 'publish'
-                ORDER BY ID
+            $products_sql = $wpdb->prepare("
+                SELECT DISTINCT p.ID, p.post_title 
+                FROM {$wpdb->posts} p {$join_sql} 
+                WHERE {$where_sql}
+                ORDER BY p.ID
                 LIMIT %d OFFSET %d
-            ", $batch_size, $offset));
+            ", $batch_size, $offset);
+            $products = $wpdb->get_results($products_sql);
             
             $processed_in_batch = 0;
             $last_product = null;
@@ -144,6 +168,54 @@ class WC_Admin_Similar_Products {
             error_log("Error in AJAX batch processing: " . $e->getMessage());
             wp_send_json_error($e->getMessage());
         }
+    }
+    
+    public function handle_ajax_category_stats() {
+        // Проверяем nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'wc_category_stats')) {
+            wp_die('Security check failed');
+        }
+        
+        // Проверяем права доступа
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die('Access denied');
+        }
+        
+        $processing_mode = isset($_POST['processing_mode']) ? sanitize_text_field($_POST['processing_mode']) : 'all';
+        $selected_categories = isset($_POST['categories']) ? array_map('intval', $_POST['categories']) : array();
+        
+        global $wpdb;
+        
+        // Строим SQL запрос аналогично основному методу
+        $where_conditions = array("p.post_type = 'product'", "p.post_status = 'publish'");
+        $join_clauses = array();
+        
+        // Добавляем условия для категорий
+        if (($processing_mode === 'categories' || $processing_mode === 'categories_new') && !empty($selected_categories)) {
+            $join_clauses[] = "JOIN {$wpdb->term_relationships} tr ON p.ID = tr.object_id";
+            $join_clauses[] = "JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id";
+            $where_conditions[] = "tt.term_id IN (" . implode(',', $selected_categories) . ")";
+        }
+        
+        // Добавляем условие для товаров без похожих
+        if ($processing_mode === 'new' || $processing_mode === 'categories_new') {
+            $table_name = $wpdb->prefix . 'product_similarities';
+            $join_clauses[] = "LEFT JOIN {$table_name} ps ON p.ID = ps.product_id";
+            $where_conditions[] = "ps.product_id IS NULL";
+        }
+        
+        $join_sql = implode(' ', array_unique($join_clauses));
+        $where_sql = implode(' AND ', $where_conditions);
+        
+        // Получаем количество товаров
+        $count_sql = "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p {$join_sql} WHERE {$where_sql}";
+        $total_products = $wpdb->get_var($count_sql);
+        
+        wp_send_json_success(array(
+            'total_products' => intval($total_products),
+            'processing_mode' => $processing_mode,
+            'selected_categories' => count($selected_categories)
+        ));
     }
     
     public function handle_recalculate() {
@@ -240,10 +312,64 @@ class WC_Admin_Similar_Products {
                 </ul>
                 <p><strong>Внимание:</strong> Обработка выполняется небольшими пакетами, чтобы избежать таймаутов. Процесс может занять несколько минут в зависимости от количества товаров.</p>
                 
+                <div style="margin: 20px 0;">
+                    <h3>Настройки обработки</h3>
+                    
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row"><label for="processing-mode">Режим обработки:</label></th>
+                            <td>
+                                <select id="processing-mode" style="min-width: 200px;">
+                                    <option value="all">Все товары</option>
+                                    <option value="categories">Только выбранные категории</option>
+                                    <option value="new">Только товары без похожих товаров</option>
+                                    <option value="categories_new">Выбранные категории + только новые</option>
+                                </select>
+                                <p class="description">Выберите какие товары обрабатывать</p>
+                            </td>
+                        </tr>
+                        <tr id="categories-row" style="display: none;">
+                            <th scope="row"><label for="product-categories">Категории товаров:</label></th>
+                            <td>
+                                <select id="product-categories" multiple style="width: 100%; height: 120px;">
+                                    <?php
+                                    $categories = get_terms(array(
+                                        'taxonomy' => 'product_cat',
+                                        'hide_empty' => false,
+                                        'orderby' => 'name',
+                                        'order' => 'ASC'
+                                    ));
+                                    
+                                    if (!empty($categories) && !is_wp_error($categories)) {
+                                        foreach ($categories as $category) {
+                                            $product_count = $wpdb->get_var($wpdb->prepare("
+                                                SELECT COUNT(DISTINCT p.ID)
+                                                FROM {$wpdb->posts} p
+                                                JOIN {$wpdb->term_relationships} tr ON p.ID = tr.object_id
+                                                JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+                                                WHERE tt.term_id = %d
+                                                AND p.post_type = 'product'
+                                                AND p.post_status = 'publish'
+                                            ", $category->term_id));
+                                            
+                                            $indent = str_repeat('&nbsp;&nbsp;&nbsp;', $this->get_category_level($category->term_id));
+                                            echo '<option value="' . esc_attr($category->term_id) . '">' . 
+                                                 $indent . esc_html($category->name) . ' (' . $product_count . ' товаров)</option>';
+                                        }
+                                    }
+                                    ?>
+                                </select>
+                                <p class="description">Выберите категории для обработки (можно выбрать несколько, удерживая Ctrl/Cmd)</p>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                
                 <p>
                     <button type="button" id="recalculate-similarities" class="button button-primary">
                         Пересчитать похожие товары
                     </button>
+                    <span id="selected-info" style="margin-left: 15px; color: #666; font-style: italic;"></span>
                 </p>
                 
                 <div class="progress-wrapper" style="display: none; margin-top: 20px;">
@@ -255,5 +381,13 @@ class WC_Admin_Similar_Products {
             </div>
         </div>
         <?php
+    }
+    
+    private function get_category_level($term_id, $level = 0) {
+        $term = get_term($term_id, 'product_cat');
+        if ($term && $term->parent) {
+            return $this->get_category_level($term->parent, $level + 1);
+        }
+        return $level;
     }
 } 

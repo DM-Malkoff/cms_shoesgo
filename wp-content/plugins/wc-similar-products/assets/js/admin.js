@@ -4,12 +4,106 @@ jQuery(document).ready(function($) {
     var $progress = $('.progress');
     var $status = $('.progress-status');
     var $processedList = $('<div class="processed-products"></div>').insertAfter($progress);
+    var $processingMode = $('#processing-mode');
+    var $categoriesRow = $('#categories-row');
+    var $productCategories = $('#product-categories');
+    var $selectedInfo = $('#selected-info');
     var isProcessing = false;
     var retryCount = 0;
     var maxRetries = 3;
     var delayBetweenBatches = 2000; // 2 секунды между пакетами (уменьшили, так как батчи меньше)
     var ajaxTimeout = 180000; // 3 минуты таймаут
     var processedProducts = [];
+    var statsTimeout;
+    
+    // Обработка изменения режима обработки
+    function updateProcessingMode() {
+        var mode = $processingMode.val();
+        var showCategories = (mode === 'categories' || mode === 'categories_new');
+        
+        if (showCategories) {
+            $categoriesRow.show();
+        } else {
+            $categoriesRow.hide();
+        }
+        
+        updateSelectedInfo();
+    }
+    
+    // Обновление информации о выбранных параметрах
+    function updateSelectedInfo() {
+        var mode = $processingMode.val();
+        var selectedCategories = $productCategories.val() || [];
+        
+        // Блокируем кнопку если нужно выбрать категории
+        var needCategories = (mode === 'categories' || mode === 'categories_new') && selectedCategories.length === 0;
+        $button.prop('disabled', needCategories && !isProcessing);
+        
+        // Получаем статистику с сервера с задержкой (debounce)
+        clearTimeout(statsTimeout);
+        statsTimeout = setTimeout(function() {
+            getProductStats(mode, selectedCategories);
+        }, 500);
+    }
+    
+    // Получение статистики товаров
+    function getProductStats(mode, selectedCategories) {
+        $selectedInfo.html('<i>Подсчитываем товары...</i>');
+        
+        $.ajax({
+            url: wcSimilarProducts.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'get_category_stats',
+                nonce: wcSimilarProducts.stats_nonce,
+                processing_mode: mode,
+                categories: selectedCategories
+            },
+            success: function(response) {
+                if (response.success) {
+                    var data = response.data;
+                    var info = '';
+                    
+                    switch(mode) {
+                        case 'all':
+                            info = 'Будут обработаны все товары (' + data.total_products + ' шт.)';
+                            break;
+                        case 'categories':
+                            if (selectedCategories.length > 0) {
+                                info = 'Будут обработаны товары из ' + selectedCategories.length + ' категорий (' + data.total_products + ' шт.)';
+                            } else {
+                                info = 'Выберите категории для обработки';
+                            }
+                            break;
+                        case 'new':
+                            info = 'Будут обработаны только товары без похожих товаров (' + data.total_products + ' шт.)';
+                            break;
+                        case 'categories_new':
+                            if (selectedCategories.length > 0) {
+                                info = 'Будут обработаны новые товары из ' + selectedCategories.length + ' категорий (' + data.total_products + ' шт.)';
+                            } else {
+                                info = 'Выберите категории для обработки';
+                            }
+                            break;
+                    }
+                    
+                    $selectedInfo.text(info);
+                } else {
+                    $selectedInfo.text('Ошибка при получении статистики');
+                }
+            },
+            error: function() {
+                $selectedInfo.text('Ошибка при получении статистики');
+            }
+        });
+    }
+    
+    // Событие изменения режима обработки
+    $processingMode.on('change', updateProcessingMode);
+    $productCategories.on('change', updateSelectedInfo);
+    
+    // Инициализация
+    updateProcessingMode();
     
     function formatPrice(price) {
         return price ? new Intl.NumberFormat('ru-RU', { 
@@ -87,7 +181,9 @@ jQuery(document).ready(function($) {
             data: {
                 action: 'recalculate_similarities_batch',
                 nonce: wcSimilarProducts.nonce,
-                batch: batch
+                batch: batch,
+                processing_mode: $processingMode.val(),
+                categories: $productCategories.val() || []
             },
             timeout: ajaxTimeout,
             success: function(response) {
@@ -167,7 +263,35 @@ jQuery(document).ready(function($) {
     $button.on('click', function() {
         if (isProcessing) return;
         
-        if (!confirm('Are you sure you want to recalculate similar products? This process may take a while.')) {
+        // Проверяем, нужно ли выбрать категории
+        var mode = $processingMode.val();
+        var selectedCategories = $productCategories.val() || [];
+        var needCategories = (mode === 'categories' || mode === 'categories_new') && selectedCategories.length === 0;
+        
+        if (needCategories) {
+            alert('Пожалуйста, выберите категории для обработки.');
+            return;
+        }
+        
+        // Формируем сообщение подтверждения
+        var confirmMessage = 'Вы уверены, что хотите пересчитать похожие товары?\n\n';
+        switch(mode) {
+            case 'all':
+                confirmMessage += 'Будут обработаны ВСЕ товары в каталоге.';
+                break;
+            case 'categories':
+                confirmMessage += 'Будут обработаны товары из ' + selectedCategories.length + ' выбранных категорий.';
+                break;
+            case 'new':
+                confirmMessage += 'Будут обработаны только товары без похожих товаров.';
+                break;
+            case 'categories_new':
+                confirmMessage += 'Будут обработаны новые товары из ' + selectedCategories.length + ' выбранных категорий.';
+                break;
+        }
+        confirmMessage += '\n\nПроцесс может занять некоторое время.';
+        
+        if (!confirm(confirmMessage)) {
             return;
         }
         

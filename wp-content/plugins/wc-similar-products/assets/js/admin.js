@@ -8,7 +8,17 @@ jQuery(document).ready(function($) {
     var $categoriesRow = $('#categories-row');
     var $productCategories = $('#product-categories');
     var $selectedInfo = $('#selected-info');
+    var $fixButton = $('#fix-missing-similarities');
+    var $categoriesSearch = $('#categories-search');
+    var $selectFoundBtn = $('#select-found-categories');
+    var $clearCategoriesBtn = $('#clear-categories-selection');
+    var $toggleViewBtn = $('#toggle-categories-view');
+    var $foundCount = $('#found-count');
+    var $selectedCount = $('#selected-categories-count');
+    var $visibleCount = $('#visible-categories-count');
+    var $totalProducts = $('#categories-total-products');
     var isProcessing = false;
+    var showOnlySelected = false;
     var retryCount = 0;
     var maxRetries = 3;
     var delayBetweenBatches = 2000; // 2 секунды между пакетами (уменьшили, так как батчи меньше)
@@ -64,9 +74,9 @@ jQuery(document).ready(function($) {
                     var data = response.data;
                     var info = '';
                     
-                    switch(mode) {
+                                         switch(mode) {
                         case 'all':
-                            info = 'Будут обработаны все товары (' + data.total_products + ' шт.)';
+                            info = '⚠️ Будут обработаны все товары (' + data.total_products + ' шт.) - ВСЕ ДАННЫЕ БУДУТ ОЧИЩЕНЫ!';
                             break;
                         case 'categories':
                             if (selectedCategories.length > 0) {
@@ -100,10 +110,147 @@ jQuery(document).ready(function($) {
     
     // Событие изменения режима обработки
     $processingMode.on('change', updateProcessingMode);
-    $productCategories.on('change', updateSelectedInfo);
+    
+    // Функции для работы с категориями
+    function searchCategories(searchTerm) {
+        var $options = $productCategories.find('option');
+        var foundCount = 0;
+        
+        // Убираем предыдущую подсветку
+        $options.removeClass('search-highlight');
+        
+        searchTerm = searchTerm.toLowerCase().trim();
+        
+        if (searchTerm === '') {
+            // Показываем все опции
+            $options.show();
+            foundCount = $options.length;
+        } else {
+            $options.each(function() {
+                var $option = $(this);
+                var categoryName = $option.data('name') || '';
+                var categoryText = $option.text().toLowerCase();
+                
+                if (categoryName.includes(searchTerm) || categoryText.includes(searchTerm)) {
+                    $option.show().addClass('search-highlight');
+                    foundCount++;
+                } else if (!showOnlySelected) {
+                    $option.hide().removeClass('search-highlight');
+                } else if (!$option.is(':selected')) {
+                    $option.hide().removeClass('search-highlight');
+                }
+            });
+        }
+        
+        // Обновляем счетчики
+        $foundCount.text(foundCount);
+        $selectFoundBtn.prop('disabled', foundCount === 0);
+        updateCategoriesInfo();
+    }
+    
+    function selectFoundCategories() {
+        var $highlighted = $productCategories.find('option.search-highlight:visible');
+        $highlighted.prop('selected', true);
+        updateCategoriesInfo();
+        updateSelectedInfo();
+    }
+    
+    function clearCategoriesSelection() {
+        $productCategories.find('option').prop('selected', false);
+        updateCategoriesInfo();
+        updateSelectedInfo();
+    }
+    
+    function toggleCategoriesView() {
+        showOnlySelected = !showOnlySelected;
+        var $options = $productCategories.find('option');
+        
+        if (showOnlySelected) {
+            $options.each(function() {
+                var $option = $(this);
+                if ($option.is(':selected')) {
+                    $option.show();
+                } else {
+                    $option.hide();
+                }
+            });
+            $toggleViewBtn.text('📋 Показать все категории');
+        } else {
+            // Применяем текущий поиск
+            searchCategories($categoriesSearch.val());
+            $toggleViewBtn.text('👁️ Показать только выбранные');
+        }
+        
+        updateCategoriesInfo();
+    }
+    
+    function updateCategoriesInfo() {
+        var selectedCategories = $productCategories.val() || [];
+        var visibleOptions = $productCategories.find('option:visible').length;
+        var totalProducts = 0;
+        
+        // Подсчитываем общее количество товаров в выбранных категориях
+        if (selectedCategories.length > 0) {
+            $productCategories.find('option:selected').each(function() {
+                var count = parseInt($(this).data('count')) || 0;
+                totalProducts += count;
+            });
+            $totalProducts.text('(~' + totalProducts.toLocaleString() + ' товаров)');
+        } else {
+            $totalProducts.text('');
+        }
+        
+        $selectedCount.text('Выбрано: ' + selectedCategories.length);
+        $visibleCount.text('Показано: ' + visibleOptions);
+    }
+    
+    // Обработчики событий для категорий
+    $categoriesSearch.on('input', function() {
+        var searchTerm = $(this).val();
+        
+        // Добавляем класс анимации при поиске
+        if (searchTerm.length > 0) {
+            $(this).addClass('searching');
+        } else {
+            $(this).removeClass('searching');
+        }
+        
+        searchCategories(searchTerm);
+    });
+    
+    // Поиск по Enter
+    $categoriesSearch.on('keydown', function(e) {
+        if (e.keyCode === 13) { // Enter
+            e.preventDefault();
+            if (!$selectFoundBtn.prop('disabled')) {
+                selectFoundCategories();
+            }
+        } else if (e.keyCode === 27) { // Escape
+            $(this).val('');
+            searchCategories('');
+        }
+    });
+    
+    $selectFoundBtn.on('click', selectFoundCategories);
+    $clearCategoriesBtn.on('click', clearCategoriesSelection);
+    $toggleViewBtn.on('click', toggleCategoriesView);
+    
+    $productCategories.on('change', function() {
+        updateCategoriesInfo();
+        updateSelectedInfo();
+    });
+    
+    // Двойной клик для быстрого поиска популярных терминов
+    $categoriesSearch.on('dblclick', function() {
+        var popularSearches = ['обувь', 'одежда', 'аксессуары', 'сумки', 'часы'];
+        var randomSearch = popularSearches[Math.floor(Math.random() * popularSearches.length)];
+        $(this).val(randomSearch);
+        searchCategories(randomSearch);
+    });
     
     // Инициализация
     updateProcessingMode();
+    updateCategoriesInfo();
     
     function formatPrice(price) {
         return price ? new Intl.NumberFormat('ru-RU', { 
@@ -213,6 +360,10 @@ jQuery(document).ready(function($) {
                         isProcessing = false;
                         $button.prop('disabled', false);
                         updateStatus(wcSimilarProducts.success_text);
+                        
+                        // Скрываем предупреждение о недостающих товарах если оно есть
+                        $('.missing-similarities-warning').fadeOut();
+                        
                         setTimeout(function() {
                             $progressWrapper.fadeOut();
                         }, 2000);
@@ -277,16 +428,21 @@ jQuery(document).ready(function($) {
         var confirmMessage = 'Вы уверены, что хотите пересчитать похожие товары?\n\n';
         switch(mode) {
             case 'all':
-                confirmMessage += 'Будут обработаны ВСЕ товары в каталоге.';
+                confirmMessage += '⚠️ ВНИМАНИЕ! Будут обработаны ВСЕ товары в каталоге.\n';
+                confirmMessage += '⚠️ ВСЕ СУЩЕСТВУЮЩИЕ СВЯЗИ ПОХОЖИХ ТОВАРОВ БУДУТ УДАЛЕНЫ!\n';
+                confirmMessage += 'Это действие НЕЛЬЗЯ отменить!';
                 break;
             case 'categories':
-                confirmMessage += 'Будут обработаны товары из ' + selectedCategories.length + ' выбранных категорий.';
+                confirmMessage += 'Будут обработаны товары из ' + selectedCategories.length + ' выбранных категорий.\n';
+                confirmMessage += 'Существующие связи для этих товаров будут заменены новыми.';
                 break;
             case 'new':
-                confirmMessage += 'Будут обработаны только товары без похожих товаров.';
+                confirmMessage += 'Будут обработаны только товары без похожих товаров.\n';
+                confirmMessage += 'Существующие связи НЕ будут затронуты.';
                 break;
             case 'categories_new':
-                confirmMessage += 'Будут обработаны новые товары из ' + selectedCategories.length + ' выбранных категорий.';
+                confirmMessage += 'Будут обработаны новые товары из ' + selectedCategories.length + ' выбранных категорий.\n';
+                confirmMessage += 'Существующие связи для обработанных товаров НЕ будут затронуты.';
                 break;
         }
         confirmMessage += '\n\nПроцесс может занять некоторое время.';
@@ -305,5 +461,23 @@ jQuery(document).ready(function($) {
         updateStatus(wcSimilarProducts.processing_text.replace('%s', '0'));
         
         processBatch(0);
+    });
+    
+    // Обработчик для кнопки "Исправить"
+    $fixButton.on('click', function() {
+        if (isProcessing) return;
+        
+        if (!confirm('Запустить обработку товаров без похожих товаров?\n\nЭто безопасная операция - существующие связи НЕ будут затронуты.')) {
+            return;
+        }
+        
+        // Автоматически выбираем режим "new"
+        $processingMode.val('new');
+        updateProcessingMode();
+        
+        // Запускаем обработку
+        setTimeout(function() {
+            $button.click();
+        }, 500);
     });
 }); 

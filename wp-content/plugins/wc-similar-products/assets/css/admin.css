@@ -211,6 +211,179 @@
     font-style: italic;
 }
 
+/* Warning styles */
+.missing-similarities-warning {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    padding: 15px;
+    border-radius: 5px;
+    margin-top: 15px;
+}
+
+.missing-similarities-warning h4 {
+    margin-top: 0;
+    color: #856404;
+}
+
+#fix-missing-similarities {
+    background: #856404;
+    border-color: #856404;
+    color: white;
+}
+
+#fix-missing-similarities:hover {
+    background: #6c5003;
+    border-color: #6c5003;
+}
+
+#selected-info {
+    font-weight: 500;
+}
+
+/* Categories search styles */
+.categories-search-wrapper {
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 15px;
+    background: #fafafa;
+}
+
+.categories-search-controls {
+    margin-bottom: 10px;
+}
+
+#categories-search {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: border-color 0.2s ease;
+}
+
+#categories-search:focus {
+    border-color: #2271b1;
+    outline: none;
+    box-shadow: 0 0 0 1px #2271b1;
+}
+
+#categories-search.searching {
+    background: linear-gradient(90deg, #f0f6fc, #ffffff, #f0f6fc);
+    background-size: 200% 100%;
+    animation: searchPulse 2s infinite;
+}
+
+@keyframes searchPulse {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.categories-buttons {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.categories-buttons .button {
+    font-size: 12px;
+    height: auto;
+    padding: 4px 8px;
+    line-height: 1.4;
+}
+
+#select-found-categories:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#select-found-categories:not(:disabled) {
+    background: #00a32a;
+    border-color: #00a32a;
+    color: white;
+}
+
+#select-found-categories:not(:disabled):hover {
+    background: #008a20;
+    border-color: #008a20;
+}
+
+#clear-categories-selection {
+    background: #d63638;
+    border-color: #d63638;
+    color: white;
+}
+
+#clear-categories-selection:hover {
+    background: #b32d2e;
+    border-color: #b32d2e;
+}
+
+#toggle-categories-view {
+    background: #2271b1;
+    border-color: #2271b1;
+    color: white;
+}
+
+#toggle-categories-view:hover {
+    background: #135e96;
+    border-color: #135e96;
+}
+
+#product-categories {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+#product-categories option {
+    padding: 3px 8px;
+    border-bottom: 1px solid #f0f0f1;
+}
+
+#product-categories option:last-child {
+    border-bottom: none;
+}
+
+#product-categories option:hover {
+    background: #f0f6fc;
+}
+
+#product-categories option:checked {
+    background: #2271b1;
+    color: white;
+}
+
+/* Highlighting for search results */
+#product-categories option.search-highlight {
+    background: #fff3cd !important;
+    color: #856404 !important;
+    font-weight: bold;
+}
+
+#product-categories option.search-highlight:checked {
+    background: #2271b1 !important;
+    color: white !important;
+}
+
+.categories-info {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #666;
+}
+
+.categories-info span {
+    font-weight: 500;
+}
+
+#found-count {
+    font-weight: bold;
+    color: #2271b1;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
     .product-item {
@@ -232,5 +405,40 @@
     
     .product-actions .button {
         margin: 0 5px 5px 0;
+    }
+    
+    /* Categories search responsive */
+    .categories-buttons {
+        flex-direction: column;
+    }
+    
+    .categories-buttons .button {
+        width: 100%;
+        margin-bottom: 5px;
+        text-align: center;
+    }
+    
+    .categories-search-wrapper {
+        padding: 10px;
+    }
+    
+    #categories-search {
+        font-size: 16px; /* Prevents zoom on iOS */
+    }
+    
+    .categories-info {
+        font-size: 12px;
+        padding: 6px 8px;
+    }
+    
+    .form-table th {
+        width: auto;
+        display: block;
+        padding: 5px 0;
+    }
+    
+    .form-table td {
+        display: block;
+        padding: 5px 0 15px 0;
     }
 } 

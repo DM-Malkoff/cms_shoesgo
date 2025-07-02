@@ -31,14 +31,14 @@ class WC_Admin_Similar_Products {
             'wc-similar-products-admin',
             plugin_dir_url(dirname(__FILE__)) . 'assets/css/admin.css',
             array(),
-            '1.0.0'
+            '1.1.0'
         );
         
         wp_enqueue_script(
             'wc-similar-products-admin',
             plugin_dir_url(dirname(__FILE__)) . 'assets/js/admin.js',
             array('jquery'),
-            '1.0.1',
+            '1.1.0',
             true
         );
         
@@ -81,11 +81,23 @@ class WC_Admin_Similar_Products {
             }
             
             global $wpdb;
+            $table_name = $wpdb->prefix . 'product_similarities';
             
-            // При первом батче очищаем таблицу
+            // Очищаем таблицу только при обработке ВСЕХ товаров
             if ($batch_number === 0) {
-                $table_name = $wpdb->prefix . 'product_similarities';
-                $wpdb->query("TRUNCATE TABLE {$table_name}");
+                if ($processing_mode === 'all') {
+                    // Дополнительная проверка безопасности
+                    $current_relations = $wpdb->get_var("SELECT COUNT(*) FROM {$table_name}");
+                    if ($current_relations > 0) {
+                        error_log("WC Similar Products: About to truncate table with {$current_relations} existing relations");
+                    }
+                    
+                    // Полная очистка только при обработке всех товаров
+                    $wpdb->query("TRUNCATE TABLE {$table_name}");
+                    error_log("WC Similar Products: Truncated table for full recalculation");
+                } else {
+                    error_log("WC Similar Products: Partial processing mode ({$processing_mode}) - table NOT truncated");
+                }
             }
             
             // Строим SQL запросы в зависимости от режима обработки
@@ -133,8 +145,23 @@ class WC_Admin_Similar_Products {
                 $product = wc_get_product($product_id);
                 
                 if ($product) {
-                    $similarity->update_product_similarities($product_id);
-                    $processed_in_batch++;
+                    try {
+                        // При частичной обработке удаляем старые записи для конкретного товара
+                        if ($processing_mode !== 'all') {
+                            $deleted_count = $wpdb->delete($table_name, array('product_id' => $product_id));
+                            if ($deleted_count > 0) {
+                                error_log("WC Similar Products: Deleted {$deleted_count} old relations for product {$product_id}");
+                            }
+                        }
+                        
+                        $similarity->update_product_similarities($product_id);
+                        $processed_in_batch++;
+                        
+                    } catch (Exception $e) {
+                        error_log("WC Similar Products: Error processing product {$product_id}: " . $e->getMessage());
+                        // Продолжаем обработку других товаров
+                        continue;
+                    }
                     
                     // Сохраняем информацию о последнем обработанном товаре
                     $last_product = array(
@@ -320,46 +347,80 @@ class WC_Admin_Similar_Products {
                             <th scope="row"><label for="processing-mode">Режим обработки:</label></th>
                             <td>
                                 <select id="processing-mode" style="min-width: 200px;">
-                                    <option value="all">Все товары</option>
-                                    <option value="categories">Только выбранные категории</option>
                                     <option value="new">Только товары без похожих товаров</option>
+                                    <option value="categories">Только выбранные категории</option>
                                     <option value="categories_new">Выбранные категории + только новые</option>
+                                    <option value="all">⚠️ Все товары (ОЧИСТИТ ВСЕ ДАННЫЕ)</option>
                                 </select>
-                                <p class="description">Выберите какие товары обрабатывать</p>
+                                <p class="description">
+                                    Выберите какие товары обрабатывать.<br>
+                                    <strong style="color: #dc3232;">⚠️ Внимание:</strong> Режим "Все товары" удалит ВСЕ существующие связи похожих товаров!
+                                </p>
                             </td>
                         </tr>
                         <tr id="categories-row" style="display: none;">
                             <th scope="row"><label for="product-categories">Категории товаров:</label></th>
                             <td>
-                                <select id="product-categories" multiple style="width: 100%; height: 120px;">
-                                    <?php
-                                    $categories = get_terms(array(
-                                        'taxonomy' => 'product_cat',
-                                        'hide_empty' => false,
-                                        'orderby' => 'name',
-                                        'order' => 'ASC'
-                                    ));
+                                <div class="categories-search-wrapper">
+                                    <div class="categories-search-controls">
+                                        <input type="text" id="categories-search" placeholder="🔍 Поиск категорий..." style="width: 100%; margin-bottom: 10px;" />
+                                        <div class="categories-buttons">
+                                            <button type="button" id="select-found-categories" class="button button-small" disabled>
+                                                ✓ Выбрать найденные (<span id="found-count">0</span>)
+                                            </button>
+                                            <button type="button" id="clear-categories-selection" class="button button-small">
+                                                ✗ Очистить выбор
+                                            </button>
+                                            <button type="button" id="toggle-categories-view" class="button button-small">
+                                                👁️ Показать только выбранные
+                                            </button>
+                                        </div>
+                                    </div>
                                     
-                                    if (!empty($categories) && !is_wp_error($categories)) {
-                                        foreach ($categories as $category) {
-                                            $product_count = $wpdb->get_var($wpdb->prepare("
-                                                SELECT COUNT(DISTINCT p.ID)
-                                                FROM {$wpdb->posts} p
-                                                JOIN {$wpdb->term_relationships} tr ON p.ID = tr.object_id
-                                                JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
-                                                WHERE tt.term_id = %d
-                                                AND p.post_type = 'product'
-                                                AND p.post_status = 'publish'
-                                            ", $category->term_id));
-                                            
-                                            $indent = str_repeat('&nbsp;&nbsp;&nbsp;', $this->get_category_level($category->term_id));
-                                            echo '<option value="' . esc_attr($category->term_id) . '">' . 
-                                                 $indent . esc_html($category->name) . ' (' . $product_count . ' товаров)</option>';
+                                    <select id="product-categories" multiple style="width: 100%; height: 150px;">
+                                        <?php
+                                        $categories = get_terms(array(
+                                            'taxonomy' => 'product_cat',
+                                            'hide_empty' => false,
+                                            'orderby' => 'name',
+                                            'order' => 'ASC'
+                                        ));
+                                        
+                                        if (!empty($categories) && !is_wp_error($categories)) {
+                                            foreach ($categories as $category) {
+                                                $product_count = $wpdb->get_var($wpdb->prepare("
+                                                    SELECT COUNT(DISTINCT p.ID)
+                                                    FROM {$wpdb->posts} p
+                                                    JOIN {$wpdb->term_relationships} tr ON p.ID = tr.object_id
+                                                    JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+                                                    WHERE tt.term_id = %d
+                                                    AND p.post_type = 'product'
+                                                    AND p.post_status = 'publish'
+                                                ", $category->term_id));
+                                                
+                                                $level = $this->get_category_level($category->term_id);
+                                                $indent = str_repeat('&nbsp;&nbsp;&nbsp;', $level);
+                                                echo '<option value="' . esc_attr($category->term_id) . '" ' .
+                                                     'data-name="' . esc_attr(strtolower($category->name)) . '" ' .
+                                                     'data-level="' . esc_attr($level) . '" ' .
+                                                     'data-count="' . esc_attr($product_count) . '">' . 
+                                                     $indent . esc_html($category->name) . ' (' . $product_count . ' товаров)</option>';
+                                            }
                                         }
-                                    }
-                                    ?>
-                                </select>
-                                <p class="description">Выберите категории для обработки (можно выбрать несколько, удерживая Ctrl/Cmd)</p>
+                                        ?>
+                                    </select>
+                                    
+                                    <div id="categories-info" class="categories-info">
+                                        <span id="selected-categories-count">Выбрано: 0</span> | 
+                                        <span id="visible-categories-count">Показано: <?php echo count($categories); ?></span>
+                                        <span id="categories-total-products" style="margin-left: 10px; color: #666;"></span>
+                                    </div>
+                                </div>
+                                <p class="description">
+                                    Выберите категории для обработки. Используйте поиск для быстрого нахождения нужных категорий.<br>
+                                    <strong>Горячие клавиши:</strong> Enter - выбрать найденные, Escape - очистить поиск, Ctrl/Cmd - множественный выбор.<br>
+                                    <strong>Совет:</strong> Двойной клик в поле поиска для случайного поискового термина.
+                                </p>
                             </td>
                         </tr>
                     </table>
@@ -371,6 +432,37 @@ class WC_Admin_Similar_Products {
                     </button>
                     <span id="selected-info" style="margin-left: 15px; color: #666; font-style: italic;"></span>
                 </p>
+                
+                <?php 
+                // Проверяем есть ли товары без похожих товаров
+                $products_without_similar = $wpdb->get_var("
+                    SELECT COUNT(DISTINCT p.ID)
+                    FROM {$wpdb->posts} p
+                    LEFT JOIN {$table_name} ps ON p.ID = ps.product_id
+                    WHERE p.post_type = 'product' 
+                    AND p.post_status = 'publish'
+                    AND ps.product_id IS NULL
+                ");
+                
+                if ($products_without_similar > 0): ?>
+                    <div class="missing-similarities-warning">
+                        <h4 style="margin-top: 0; color: #856404;">⚠️ Обнаружены товары без похожих товаров</h4>
+                        <p style="margin-bottom: 10px;">
+                            Найдено <strong><?php echo $products_without_similar; ?></strong> товаров без похожих товаров. 
+                            Это может быть результатом прерванной обработки или ошибки.
+                        </p>
+                        <p style="margin-bottom: 15px; font-size: 13px; color: #666;">
+                            <strong>Что произошло:</strong> Возможно, процесс обработки был прерван, и некоторые товары остались без похожих товаров.
+                            Нажмите кнопку ниже, чтобы безопасно обработать только эти товары.
+                        </p>
+                        <button type="button" id="fix-missing-similarities" class="button button-secondary">
+                            🔧 Исправить - обработать товары без похожих
+                        </button>
+                        <small style="color: #666; display: block; margin-top: 8px;">
+                            ✅ Безопасная операция - существующие связи НЕ будут затронуты
+                        </small>
+                    </div>
+                <?php endif; ?>
                 
                 <div class="progress-wrapper" style="display: none; margin-top: 20px;">
                     <div class="progress-container">
